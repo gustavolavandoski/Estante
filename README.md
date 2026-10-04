@@ -1,5 +1,8 @@
 # Estante
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23131607.svg)](https://doi.org/10.5281/zenodo.23131607)
+[![Licença: AGPL-3.0](https://img.shields.io/badge/licen%C3%A7a-AGPL--3.0-blue.svg)](LICENSE)
+
 Organizador de livros, artigos e textos acadêmicos para desktop. Você indica uma pasta (bagunçada) e a Estante:
 
 1. **lê** cada PDF/EPUB e identifica **autor, título e ano** — por DOI/ISBN em bases abertas
@@ -83,6 +86,9 @@ Estrutura: `arquivos.py` (leitura local, hash, duplicatas) · `metadados.py` (id
 
 Se a Estante for útil na sua pesquisa, cite-a — os dados estão em [CITATION.cff](CITATION.cff)
 (no GitHub, botão *Cite this repository*).
+
+> Lavandoski da Silva, L. G. (2026). *Estante: organizador de livros, artigos e textos acadêmicos*
+> (Versão 0.1.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23131607
 
 ## Licença
 
