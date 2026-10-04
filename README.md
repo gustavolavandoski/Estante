@@ -92,7 +92,7 @@ Se a Estante for útil na sua pesquisa, cite-a — os dados estão em [CITATION.
 
 ## Licença
 
-Copyright (C) 2026 Luiz Gustavo Lavandoski.
+Copyright (C) 2026 Luiz Gustavo Lavandoski da Silva.
 [GNU AGPL-3.0](LICENSE) — a mesma da [PyMuPDF](https://github.com/pymupdf/PyMuPDF), usada para ler os PDFs.
 Você pode usar, estudar, modificar e redistribuir; versões modificadas distribuídas precisam manter o código aberto
 sob a mesma licença.
