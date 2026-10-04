@@ -27,6 +27,5 @@ keywords:
   - OpenAlex
   - ciência aberta
   - reference management
-# Depois de publicar no Zenodo, acrescente aqui:
-# doi: 10.5281/zenodo.XXXXXXX
-# repository-code: "https://github.com/<usuario>/estante"
+doi: 10.5281/zenodo.23131607  # DOI do conceito: sempre aponta para a versão mais recente
+repository-code: "https://github.com/gustavolavandoski/Estante"
