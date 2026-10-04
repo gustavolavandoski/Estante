@@ -9,7 +9,7 @@ abstract: >-
   anotadas e organiza a coleção no padrão "Sobrenome - Título - Ano", com revisão prévia em tabela
   e registro para desfazer.
 authors:
-  - family-names: Lavandoski
+  - family-names: Lavandoski da Silva
     given-names: Luiz Gustavo
     orcid: "https://orcid.org/0000-0003-3102-6062"
     affiliation: "Universidade Federal do ABC (UFABC)"
