@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "Se usar este software, por favor cite-o como abaixo."
+type: software
+title: "Estante: organizador de livros, artigos e textos acadêmicos"
+abstract: >-
+  Aplicativo desktop, de código aberto e execução local, que identifica autor, título e ano
+  de PDFs e EPUBs (por DOI/ISBN em bases abertas — CrossRef, OpenAlex, Open Library e Google Books —
+  ou pelos metadados e pela capa do arquivo), sugere temas, detecta duplicatas preservando cópias
+  anotadas e organiza a coleção no padrão "Sobrenome - Título - Ano", com revisão prévia em tabela
+  e registro para desfazer.
+authors:
+  - family-names: Lavandoski
+    given-names: Luiz Gustavo
+    orcid: "https://orcid.org/0000-0003-3102-6062"
+    affiliation: "Universidade Federal do ABC (UFABC)"
+version: 0.1.0
+date-released: "2026-10-04"
+license: AGPL-3.0-only
+keywords:
+  - gestão de referências
+  - organização de bibliografia
+  - metadados bibliográficos
+  - PDF
+  - DOI
+  - ISBN
+  - CrossRef
+  - OpenAlex
+  - ciência aberta
+  - reference management
+# Depois de publicar no Zenodo, acrescente aqui:
+# doi: 10.5281/zenodo.XXXXXXX
+# repository-code: "https://github.com/<usuario>/estante"

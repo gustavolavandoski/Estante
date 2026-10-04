@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "estante"
+version = "0.1.0"
+description = "Organizador desktop de livros, artigos e textos: Sobrenome - Título - Ano, por tema ou autor"
+readme = "README.md"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "Luiz Gustavo Lavandoski" }]
+requires-python = ">=3.10"
+dependencies = ["pymupdf>=1.24", "requests>=2.28"]
+
+[project.gui-scripts]
+estante = "estante.gui:main"
+
+[tool.setuptools]
+packages = ["estante"]
