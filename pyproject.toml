@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "estante"
-version = "0.2.0"
+version = "0.2.1"
 description = "Organizador desktop de livros, artigos e textos: Sobrenome - Título - Ano, por tema ou autor"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }

@@ -10,7 +10,7 @@ from . import __version__, arquivos
 from .nomes import capitalizar, norm, similaridade, suavizar_titulo
 
 HTTP = requests.Session()
-VERSAO = 4  # sobe quando a identificação melhora: o cache refaz só o que não foi bem identificado
+VERSAO = 5  # sobe quando a identificação melhora: o cache refaz só o que não foi bem identificado
 CHAVE_OPENALEX = ""
 AVISOS = set()  # problemas com as bases (ex.: cota esgotada), mostrados ao fim da análise
 
@@ -207,7 +207,9 @@ RE_ANO = re.compile(r"\b(18\d{2}|19\d{2}|20\d{2})\b")
 SUFIXOS = {"junior", "jr", "neto", "filho", "sobrinho"}
 # capa que é, na verdade, resumo ou documento pessoal (contrato, declaração…)
 CAPA_INVALIDA = re.compile(r"^(resumo|abstract)\b|\bcpf\b|\bportador|inscrit[oa] n[oa]|solteir|casad[oa],|"
-                           r"copyright|demonstrativo|holerite|contracheque|pagamento mensal|pr[oó].reitoria", re.I)
+                           r"copyright|demonstrativo|holerite|contracheque|pagamento mensal|pr[oó].reitoria|"
+                           # número de revista ou só a data ("Vol. 857 – 2º quadrimestre", "November 2008")
+                           r"^vol\.|^(\w+\s+(de\s+)?)?(1[89]|20)\d\d$", re.I)
 
 
 def sobrenome_de(nome):
@@ -238,7 +240,7 @@ def pela_capa(path, info):
                     "observacao": "título e autor do nome do arquivo conferem com o texto"}
     for titulo, autor in info.get("capa_ids", []):
         sobrenome = sobrenome_de(autor)
-        if len(norm(sobrenome)) >= 3 and len(palavras(titulo)) >= 3 and not CAPA_INVALIDA.search(titulo):
+        if len(norm(sobrenome)) >= 3 and len(palavras(titulo)) >= 2 and not CAPA_INVALIDA.search(titulo):
             ano, nota = ano_provavel(texto, Path(path).stem)
             return {"sobrenome": capitalizar(sobrenome), "titulo": suavizar_titulo(titulo), "ano": ano,
                     "fonte": "capa do arquivo", "identificador": "", "confianca": "media",

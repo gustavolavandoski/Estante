@@ -199,6 +199,41 @@ class TestComPasta(unittest.TestCase):
         r = metadados.identificar(caminho, arquivos.ler(caminho), online=False)
         self.assertEqual((r["sobrenome"], r["ano"], r["fonte"]), ("Frois", "2018", "nome do arquivo"))
 
+    def test_offline_capa_abnt_com_autor_acima_do_titulo(self):
+        caminho = os.path.join(self.origem, "cec1d4d9.pdf")
+        doc = pymupdf.open()
+        pg = doc.new_page()
+        pg.insert_text((72, 100), "FACULDADE DE DIREITO DO SUL DE MINAS", fontsize=16)
+        pg.insert_text((72, 200), "HENRIQUE VIEGAS CUNHA", fontsize=16)
+        pg.insert_text((72, 400), "A SOBERANIA NA ERA DA INFORMAÇÃO", fontsize=18)
+        pg.insert_text((72, 700), "POUSO ALEGRE - MG", fontsize=12)
+        pg.insert_text((72, 720), "2018", fontsize=12)
+        doc.new_page().insert_textbox(pymupdf.Rect(72, 72, 520, 780), "Texto da monografia. " * 80, fontsize=12)
+        doc.save(caminho)
+        doc.close()
+        r = metadados.identificar(caminho, arquivos.ler(caminho), online=False)
+        self.assertEqual((r["sobrenome"], r["ano"], r["fonte"]), ("Cunha", "2018", "capa do arquivo"))
+
+    def test_offline_titulo_em_negrito_do_tamanho_do_corpo(self):
+        caminho = os.path.join(self.origem, "A_INFLUENCIA_DA_MIDIA.pdf")
+        doc = pymupdf.open()
+        pg = doc.new_page()
+        pg.insert_text((72, 80), "A influência da mídia no processo penal", fontsize=12, fontname="hebo")
+        pg.insert_text((72, 110), "Sarah Mendes Cunha 1", fontsize=12)
+        pg.insert_textbox(pymupdf.Rect(72, 140, 520, 780), "Texto do artigo, publicado em 2023. " * 60, fontsize=12)
+        doc.save(caminho)
+        doc.close()
+        r = metadados.identificar(caminho, arquivos.ler(caminho), online=False)
+        self.assertEqual((r["sobrenome"], r["titulo"]), ("Cunha", "A influência da mídia no processo penal"))
+
+    def test_nome_de_pessoa_limpa_marcas_e_recusa_instituicoes(self):
+        self.assertEqual(arquivos.nome_de_pessoa("Peterson Ferreira da Silva "), "Peterson Ferreira da Silva")
+        self.assertEqual(arquivos.nome_de_pessoa("RODRIGO SANTOS COSTA - Maj Art"), "RODRIGO SANTOS COSTA")
+        self.assertEqual(arquivos.nome_de_pessoa("1 st Luiz Gustavo Lavandoski da Silva"), "Luiz Gustavo Lavandoski da Silva")
+        self.assertEqual(arquivos.nome_de_pessoa("Milton do Nascimento"), "Milton do Nascimento")
+        for nao in ("POUSO ALEGRE - MG", "COMANDO DE OPERAÇÕES TERRESTRES", "ESTADO-MAIOR CONJUNTO DAS FORÇAS ARMADAS"):
+            self.assertEqual(arquivos.nome_de_pessoa(nao), "")
+
     def test_hash_guardado_e_refeito_quando_o_arquivo_muda(self):
         p = os.path.join(self.origem, "z.pdf")
         h = arquivos.sha1(p)

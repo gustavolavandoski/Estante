@@ -127,7 +127,7 @@ Se a Estante for útil na sua pesquisa, cite-a — os dados estão em [CITATION.
 (no GitHub, botão *Cite this repository*).
 
 > Lavandoski da Silva, L. G. (2026). *Estante: organizador de livros, artigos e textos acadêmicos*
-> (Versão 0.2.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23131607
+> (Versão 0.2.1) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23131607
 
 ## Licença
 

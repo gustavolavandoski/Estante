@@ -117,27 +117,99 @@ NAO_NOME = re.compile(r"universi|revista|journal|review|institut|escola|school|f
                       r"washington|london|new york|\bview\b|project|general|warfare|cyber|track|policy|strategy|"
                       r"espacial|declara|profissional|editor|\(ed|\beds?\.|\borgs?\.|coord|curso|course|\bdados\b|"
                       r"\bestados\b|\bforce\b|\bltda\b|\binc\b|\bcorp|\bllc\b|\bs\.?a\.?$|funda[cç][aã]o|foundation|"
-                      r"cataloga|copyright|associa[cç]|\bclube\b", re.I)
+                      r"cataloga|copyright|associa[cç]|\bclube\b|comando|estado-maior|for[cç]as|armad[ao]s|manual|campanha|"
+                      r"assinatura|requerente|secretaria|executiv|disputa|estrat[eé]g|elementos|\bevents?\b|"
+                      r"capabilit|protection|"
+                      # palavras com sufixo de substantivo comum, que não são sobrenomes ("Operações", "Sociedade"),
+                      # sem pegar Nascimento, Trindade, Piedade
+                      r"\w(ções|sões|(?<!trin)(?<!pie)dades?|mentos|ências|âncias|ismos?|tions?|ments?|it(y|ies)|ness|"
+                      r"ship|ics)\b", re.I)
 PALAVRAS_COMUNS = {"em", "no", "na", "nos", "nas", "para", "com", "sobre", "por", "of", "the", "in", "for", "on",
-                   "to", "with", "and", "an", "at", "from", "um", "uma", "o", "a", "os", "as"}
+                   "to", "with", "and", "an", "at", "from", "um", "uma", "o", "a", "os", "as", "meu", "minha", "my", "our"}
 RE_POR = re.compile(r"\b(?:by|por)\s+([A-ZÀ-Ý][\w'’.-]+(?:\s+(?:de|da|do|dos|das|van|von)?\s*[A-ZÀ-Ý][\w'’.-]+){1,4})")
+
+
+# títulos, postos e ordinais antes do nome ("Prof. Dr.", "Aspirante", "Maj", "1st")
+RE_TRATAMENTO = re.compile(r"^(?:(?:prof(?:essor|a)?|dra?|me|msc?|phd|sir|mr?s?|aspirante|cadete|gen|brig|cel|ten|"
+                           r"maj|cap|sgt|cmte|alm|cav|inf)\.?\s+|\d+\s*(?:st|nd|rd|th|º|ª)\s+)+", re.I)
 
 
 def nome_de_pessoa(linha):
     """Primeiro nome de pessoa de uma linha de autores ("Fulano de Tal1, Beltrano"), ou ''."""
+    linha = re.sub(r"[\ue000-\uf8ff]", "", linha)  # símbolos de fontes como Symbol/Wingdings (o "*" da nota)
+    sem_tratamento = RE_TRATAMENTO.sub("", linha.strip())
+    com_posto = sem_tratamento != linha.strip()
+    linha = sem_tratamento
     linha = re.sub(r"[\d*¹²³⁴†‡§]+(?=\s|,|;|$)", "", linha).strip()  # marcas de nota
+    if re.search(r"\s[-–—/]\s*[A-Z]{2}$", linha):  # "POUSO ALEGRE - MG": cidade e estado
+        return ""
+    linha = re.sub(r"\s+[-–—]\s+(\w{1,4}\b\.?\s*){1,3}$", "", linha)  # "RODRIGO SANTOS COSTA - Maj Art"
     if len(linha) > 120 or NAO_NOME.search(linha):
         return ""
     primeiro = re.split(r",|;|\s+and\s+|\s+e\s+|\s*&\s*", linha)[0].strip()
     palavras = primeiro.split()
+    if com_posto and re.fullmatch(r"[A-ZÀ-Ý][\w'’-]+", primeiro):
+        return primeiro  # "Gen Machado", "MAJ Israel": posto e sobrenome
     if not RE_NOME.match(primeiro) or any(p.lower() in PALAVRAS_COMUNS for p in palavras):
         return ""
     return primeiro
 
 
+RE_SECAO = re.compile(r"^(resumo|abstract|introdu|palavras|keywords|sum[aá]rio|contents|agradec)", re.I)
+
+
+def _candidatos_titulo(linhas):
+    """Grupos de linhas (índices) que podem ser o título, do mais destacado ao menos: as de fonte parecida,
+    da maior para a menor; e, quando o corpo do texto já tem a maior fonte, os trechos em negrito."""
+    tamanhos = sorted({t for t, x, _ in linhas if not re.fullmatch(r"[\d\W]*", x)}, reverse=True)
+    vistos = set()
+    for tam in tamanhos:
+        if tam in vistos:
+            continue
+        grupo = [i for i, (t, x, _) in enumerate(linhas) if tam * 0.96 <= t <= tam and len(x) > 1]
+        vistos.update(linhas[i][0] for i in grupo)
+        if not grupo:
+            continue
+        if len(" ".join(linhas[i][1] for i in grupo)) <= 250:
+            yield grupo, False
+            continue
+        # título do tamanho do corpo: só o negrito o destaca
+        run = []
+        for i, (t, x, negrito) in enumerate(linhas):
+            continua = run and (negrito or (x.isupper() and linhas[run[-1]][1].isupper()))
+            if t >= tam * 0.96 and (continua or (not run and negrito)) and not RE_SECAO.match(x):
+                run.append(i)
+            elif run:
+                yield run, True
+                run = []
+        if run:
+            yield run, True
+        return  # abaixo da fonte do corpo só há notas e rodapés
+
+
+def _autor_perto(linhas, primeira, ultima):
+    """Nome logo abaixo do título; senão, logo acima (capas que põem o autor antes do título):
+    o primeiro da lista de autores, ou seja, o mais alto de um bloco seguido de nomes."""
+    for _, x, _ in linhas[ultima + 1: ultima + 6]:
+        autor = nome_de_pessoa(x)
+        if autor:
+            return autor
+    autor = ""
+    for _, x, _ in reversed(linhas[max(0, primeira - 6): primeira]):
+        nome = nome_de_pessoa(x)
+        if nome:
+            autor = nome
+        elif autor:
+            break
+    if autor:
+        return autor
+    m = RE_POR.search(" ".join(x for _, x, _ in linhas))
+    return nome_de_pessoa(m.group(1)) if m else ""
+
+
 def titulo_e_autor(doc, pagina=0):
-    """Palpite de título (o texto com a maior fonte da página) e do autor (nome logo abaixo do título,
-    ou "by/por Fulano" na página)."""
+    """Palpite de título (o texto com a maior fonte da página, ou em negrito) e do autor (nome logo abaixo
+    ou logo acima do título, ou "by/por Fulano" na página)."""
     try:
         blocos = doc[pagina].get_text("dict")["blocks"]
     except Exception:  # noqa: BLE001
@@ -147,23 +219,26 @@ def titulo_e_autor(doc, pagina=0):
         for l in b.get("lines", []):
             spans = [s for s in l["spans"] if s["text"].strip()]
             if spans:
-                linhas.append((round(max(s["size"] for s in spans), 1), " ".join(s["text"].strip() for s in spans)))
-    if not linhas:
-        return "", ""
-    maior = max(t for t, _ in linhas)
-    no_titulo = [i for i, (t, x) in enumerate(linhas) if t >= maior - 0.5 and len(x) > 1]
-    titulo = re.sub(r"\s+", " ", " ".join(linhas[i][1] for i in no_titulo)).strip()
-    if not 8 <= len(titulo) <= 250:
-        return "", ""
-    autor = ""
-    for _, x in linhas[no_titulo[-1] + 1: no_titulo[-1] + 6]:
-        autor = nome_de_pessoa(x)
-        if autor:
-            break
-    if not autor:
-        m = RE_POR.search(" ".join(x for _, x in linhas))
-        autor = nome_de_pessoa(m.group(1)) if m else ""
-    return titulo, autor
+                texto = re.sub(r"_{3,}|\s+", " ", " ".join(s["text"].strip() for s in spans)).strip()  # "DA GUERRA ____"
+                if not texto:
+                    continue
+                linhas.append((round(max(s["size"] for s in spans), 1), texto,
+                               all(s["flags"] & 16 for s in spans)))
+    autor_destacado = ""
+    for grupo, por_negrito in _candidatos_titulo(linhas):
+        # continuação do título em letra minúscula e fonte um pouco menor ("Crimen Organizado… / en Latinoamérica")
+        while (grupo[-1] + 1 < len(linhas) and linhas[grupo[-1] + 1][1][:1].islower()
+               and linhas[grupo[-1] + 1][0] >= linhas[grupo[-1]][0] * 0.75):
+            grupo = grupo + [grupo[-1] + 1]
+        titulo = re.sub(r"\s+", " ", " ".join(linhas[i][1] for i in grupo)).strip()
+        if len(titulo) < 8 or len(titulo) > 250:
+            continue  # sigla ou logotipo em fonte enorme ("CNT"): o título é o próximo
+        nome = nome_de_pessoa(titulo)
+        if por_negrito and nome and len(nome) >= len(titulo) - 3:
+            autor_destacado = autor_destacado or nome  # autor em negrito antes do título
+            continue
+        return titulo, autor_destacado or _autor_perto(linhas, grupo[0], grupo[-1])
+    return "", ""
 
 
 def ler(path):
