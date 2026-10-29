@@ -1,6 +1,6 @@
 # Estante
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23131607.svg)](https://doi.org/10.5281/zenodo.23131607)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23752563.svg)](https://doi.org/10.5281/zenodo.23752563)
 [![Licença: AGPL-3.0](https://img.shields.io/badge/licen%C3%A7a-AGPL--3.0-blue.svg)](LICENSE)
 
 Organizador de livros, artigos e textos acadêmicos para desktop. Você indica uma pasta (bagunçada) e a Estante:
@@ -127,7 +127,7 @@ Se a Estante for útil na sua pesquisa, cite-a — os dados estão em [CITATION.
 (no GitHub, botão *Cite this repository*).
 
 > Lavandoski da Silva, L. G. (2026). *Estante: organizador de livros, artigos e textos acadêmicos*
-> (Versão 0.2.1) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23131607
+> (Versão 0.2.1) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23752563
 
 ## Licença
 
