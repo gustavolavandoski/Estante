@@ -4,7 +4,8 @@ import re
 
 from . import config
 
-ARQUIVO = "temas.json"
+ARQUIVO_PADRAO = "temas.json"
+ARQUIVO = ARQUIVO_PADRAO  # cada perfil tem a sua lista de temas (temas_<perfil>.json)
 OUTROS = "Outros"
 
 PADRAO = {
@@ -44,6 +45,27 @@ def carregar():
 def caminho():
     carregar()
     return config.pasta_dados() / ARQUIVO
+
+
+def palavras_chave(texto):
+    """Palavras digitadas pelo usuário ("drone, sarp, vant") -> expressão regular."""
+    return "|".join(re.escape(p.strip().lower()) for p in re.split(r"[,;\n]", texto or "") if p.strip())
+
+
+def aplicar_revisao(renomear, novos):
+    """Guarda a revisão feita depois da análise. `novos`: {nome: expressão}; `renomear`: {antigo: novo}
+    (dar o nome de um tema existente junta os dois; renomear para OUTROS desfaz o tema)."""
+    temas = carregar()
+    for nome, rx in novos.items():
+        temas[nome] = f"{temas[nome]}|{rx}" if nome in temas else rx
+    for antigo, novo in renomear.items():
+        if antigo not in temas or not novo or novo == antigo:
+            continue
+        rx = temas.pop(antigo)
+        if novo != OUTROS:
+            temas[novo] = f"{temas[novo]}|{rx}" if novo in temas else rx
+    config.salvar(ARQUIVO, temas)
+    return temas
 
 
 def sugerir(texto, temas):

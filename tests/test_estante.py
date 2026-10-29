@@ -6,7 +6,7 @@ from unittest import mock
 
 import pymupdf
 
-from estante import analise, arquivos, config, nomes, organizar
+from estante import analise, arquivos, config, metadados, nomes, organizar, temas
 
 
 def criar_pdf(caminho, titulo, corpo="", autor="", anotar=False):
@@ -40,6 +40,29 @@ class TestNomes(unittest.TestCase):
 
     def test_suavizar_caixa_alta(self):
         self.assertEqual(nomes.suavizar_titulo("A GUERRA HÍBRIDA: UM ESTUDO"), "A guerra híbrida: Um estudo")
+
+
+class TestBuscaPorTitulo(unittest.TestCase):
+    INFO = {"texto": "Poder militar: entre o autoritarismo e a democracia\nJorge Zaverucha\n" + "Texto do livro. " * 50,
+            "titulo_fonte": "Poder militar: entre o autoritarismo e a democracia", "meta": {}}
+
+    def achar(self, respostas):
+        with mock.patch.object(metadados, "buscar_titulo", return_value=respostas):
+            return metadados.por_titulo("poder militar.pdf", self.INFO, self.INFO["texto"])
+
+    def test_aceita_titulo_e_autor_que_conferem(self):
+        r = self.achar([({"sobrenome": "Zaverucha", "titulo": "Poder militar: entre o autoritarismo e a democracia",
+                          "ano": "2001"}, "OpenAlex (título)", "x")])
+        self.assertEqual((r["sobrenome"], r["ano"], r["confianca"]), ("Zaverucha", "2001", "media"))
+
+    def test_recusa_resenha_obra_parecida_e_autor_ausente(self):
+        self.assertIsNone(self.achar([
+            ({"sobrenome": "Little", "titulo": "Zaverucha's Poder militar: entre o autoritarismo e a democracia, a review",
+              "ano": "2003"}, "OpenAlex (título)", "x"),
+            ({"sobrenome": "Zaverucha", "titulo": "Poder militar na democracia brasileira", "ano": "2010"}, "CrossRef (título)", "y"),
+            ({"sobrenome": "戦略研究学会", "titulo": "Poder militar: entre o autoritarismo e a democracia", "ano": "2001"},
+             "OpenAlex (título)", "z"),
+        ]))
 
 
 class TestComPasta(unittest.TestCase):
@@ -76,7 +99,7 @@ class TestComPasta(unittest.TestCase):
 
         for i in itens:
             if not i.duplicata_de:
-                i.incluir = True
+                i.incluir, i.confianca = True, "manual"  # revisados na tabela
         organizar.planejar(itens, self.destino, organizar.POR_TEMA)
         self.assertEqual(por_nome["anotado.pdf"].destino,
                          os.path.join("Geopolítica", "Frois - Geopolítica do ciberespaço.pdf"))
@@ -101,6 +124,126 @@ class TestComPasta(unittest.TestCase):
         self.assertEqual(arquivos.listar(self.origem), [])
         organizar.desfazer(log)
         self.assertEqual(len(arquivos.listar(self.origem)), 4)
+
+    def test_nao_confirmados_vao_para_pasta_de_confirmacao(self):
+        itens = analise.analisar_pasta(self.origem, online=False)
+        for i in itens:
+            i.incluir = True
+        alvo = itens[0]
+        alvo.confianca = "baixa"
+        organizar.planejar(itens, self.destino, organizar.POR_TEMA)
+        self.assertEqual(alvo.destino, os.path.join(organizar.PASTA_CONFIRMAR, os.path.basename(alvo.caminho)))
+        alvo.confianca = "manual"  # depois de revisado, segue a regra normal
+        organizar.planejar(itens, self.destino, organizar.POR_TEMA)
+        self.assertFalse(alvo.destino.startswith(organizar.PASTA_CONFIRMAR))
+
+    def test_duplicatas_marcadas_vao_para_pasta_de_exclusao(self):
+        itens = analise.analisar_pasta(self.origem, online=False)
+        for i in itens:
+            i.incluir, i.confianca = True, "manual"
+        organizar.planejar(itens, self.destino, organizar.POR_TEMA)
+        por_nome = {os.path.basename(i.caminho): i for i in itens}
+        self.assertEqual(por_nome["copia.pdf"].destino, os.path.join(organizar.PASTA_DUPLICATAS, "copia.pdf"))
+        self.assertTrue(por_nome["anotado.pdf"].destino.startswith("Geopolítica"))
+        _, feitos, pulados = organizar.aplicar(itens, self.destino, "copiar")
+        self.assertEqual(feitos, 2)  # no modo copiar as duplicatas não são separadas
+        self.assertEqual(len(pulados), 2)
+
+    def test_copia_ja_no_lugar_fica_e_original_vai_para_exclusao(self):
+        itens = analise.analisar_pasta(self.origem, online=False)
+        z = next(i for i in itens if i.caminho.endswith("z.pdf"))
+        z.incluir, z.confianca = True, "manual"
+        organizar.planejar(itens, self.origem, organizar.POR_TEMA)
+        organizar.aplicar(itens, self.origem, "copiar")  # como na primeira rodada: cópia renomeada + original
+        copia = os.path.join(self.origem, z.destino)
+
+        itens = analise.analisar_pasta(self.origem, online=False)
+        for i in itens:
+            i.incluir, i.confianca = True, "manual"
+        organizar.planejar(itens, self.origem, organizar.POR_TEMA)
+        organizar.aplicar(itens, self.origem, "mover")
+        self.assertTrue(os.path.exists(copia))
+        self.assertFalse(os.path.exists(os.path.join(self.origem, "z.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(self.origem, organizar.PASTA_DUPLICATAS, "z.pdf")))
+
+    def test_mover_com_identico_no_destino_separa_o_redundante(self):
+        itens = analise.analisar_pasta(self.origem, online=False)
+        z = next(i for i in itens if i.caminho.endswith("z.pdf"))
+        z.incluir, z.confianca = True, "manual"
+        organizar.planejar(itens, self.destino, organizar.POR_TEMA)
+        os.makedirs(os.path.dirname(os.path.join(self.destino, z.destino)))
+        shutil.copy(z.caminho, os.path.join(self.destino, z.destino))
+        log, feitos, pulados = organizar.aplicar(itens, self.destino, "mover")
+        self.assertEqual((feitos, pulados), (1, []))
+        self.assertTrue(os.path.exists(os.path.join(self.destino, organizar.PASTA_DUPLICATAS, "z.pdf")))
+        organizar.desfazer(log)
+        self.assertTrue(os.path.exists(z.caminho))
+
+    def test_offline_titulo_e_autor_da_capa(self):
+        caminho = os.path.join(self.origem, "artigo123.pdf")
+        doc = pymupdf.open()
+        doc.new_page()  # 1ª página em branco (capa em imagem, por exemplo)
+        pg = doc.new_page()
+        pg.insert_text((72, 100), "Poder militar entre o autoritarismo e a democracia", fontsize=20)
+        pg.insert_text((72, 130), "Jorge Zaverucha¹", fontsize=11)
+        pg.insert_text((72, 150), "Universidade Federal de Pernambuco", fontsize=9)
+        pg.insert_textbox(pymupdf.Rect(72, 180, 520, 780), "Texto do artigo, publicado em 2001. " * 40, fontsize=9)
+        doc.save(caminho)
+        doc.close()
+        r = metadados.identificar(caminho, arquivos.ler(caminho), online=False)
+        self.assertEqual((r["sobrenome"], r["ano"], r["confianca"]), ("Zaverucha", "2001", "media"))
+
+    def test_offline_nome_do_arquivo_conferido(self):
+        caminho = os.path.join(self.origem, "Frois - Geopolítica do ciberespaço - 2018.pdf")
+        criar_pdf(caminho, "Revista de Geopolítica", "Geopolítica do ciberespaço. Israel Frois. " * 30)
+        r = metadados.identificar(caminho, arquivos.ler(caminho), online=False)
+        self.assertEqual((r["sobrenome"], r["ano"], r["fonte"]), ("Frois", "2018", "nome do arquivo"))
+
+    def test_hash_guardado_e_refeito_quando_o_arquivo_muda(self):
+        p = os.path.join(self.origem, "z.pdf")
+        h = arquivos.sha1(p)
+        with mock.patch("builtins.open", side_effect=AssertionError("não deveria reler")):
+            self.assertEqual(arquivos.sha1(p), h)  # tamanho e data iguais: usa o guardado
+        with open(p, "ab") as f:
+            f.write(b"%anotado")
+        self.assertNotEqual(arquivos.sha1(p), h)
+
+    def test_revisao_de_temas_renomeia_junta_e_cria(self):
+        base = temas.carregar()
+        self.assertIn("Defesa e Estratégia", base)
+        novos = {"Drones": temas.palavras_chave("drone, sarp; vant")}
+        self.assertEqual(novos["Drones"], "drone|sarp|vant")
+        t = temas.aplicar_revisao({"Defesa e Estratégia": "Defesa e Estratégia Nacional",  # renomeia
+                                   "Tecnologia e Sociedade": "Geopolítica",                 # junta
+                                   "Metodologia": temas.OUTROS}, novos)                     # desfaz
+        self.assertNotIn("Defesa e Estratégia", t)
+        self.assertEqual(t["Defesa e Estratégia Nacional"], base["Defesa e Estratégia"])
+        self.assertTrue(t["Geopolítica"].endswith(base["Tecnologia e Sociedade"]))
+        self.assertNotIn("Metodologia", t)
+        self.assertEqual(temas.sugerir("uso de sarp na guerra", t), "Drones")
+        self.assertEqual(temas.carregar(), t)  # ficou guardado
+
+    def test_outros_formatos_vao_para_pasta_propria(self):
+        with open(os.path.join(self.origem, "anotacoes.docx"), "wb") as f:
+            f.write(b"PK docx de exemplo")
+        itens = analise.analisar_pasta(self.origem, online=False)
+        doc = next(i for i in itens if i.caminho.endswith(".docx"))
+        self.assertEqual(doc.fonte, "outro formato")
+        doc.incluir = True
+        organizar.planejar(itens, self.destino, organizar.POR_TEMA)
+        self.assertEqual(doc.destino, os.path.join(organizar.PASTA_FORMATOS, "anotacoes.docx"))
+
+    def test_pasta_analisada_dentro_do_destino_e_lida(self):
+        # analisar D:\Biblioteca\_A confirmar com destino D:\Biblioteca
+        confirmar = os.path.join(self.destino, organizar.PASTA_CONFIRMAR)
+        os.makedirs(confirmar)
+        shutil.copy(os.path.join(self.origem, "z.pdf"), confirmar)
+        ign = analise.pastas_ignoradas(confirmar, self.destino)
+        self.assertEqual(ign, [os.path.join(self.destino, organizar.PASTA_DUPLICATAS)])
+        self.assertEqual(len(analise.analisar_pasta(confirmar, online=False, ignorar=ign)), 1)
+        # o contrário: destino dentro da pasta analisada continua fora da análise
+        dentro = os.path.join(self.origem, "Organizados")
+        self.assertIn(dentro, analise.pastas_ignoradas(self.origem, dentro))
 
     def test_csv_ida_e_volta(self):
         itens = analise.analisar_pasta(self.origem, online=False)

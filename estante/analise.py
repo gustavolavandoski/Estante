@@ -3,7 +3,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from . import arquivos, metadados, temas
+from . import arquivos, metadados, organizar, temas
 from .config import Cache
 
 
@@ -33,23 +33,43 @@ class Item:
 CAMPOS_CACHE = ("sobrenome", "titulo", "ano", "fonte", "identificador", "confianca", "observacao")
 
 
+def _versao():
+    """Com alguma base fora do ar (ex.: cota esgotada), o resultado fica marcado para ser refeito."""
+    return 1 if metadados.AVISOS else metadados.VERSAO
+
+
 def analisar_um(caminho, online, cache, lista_temas):
     h = arquivos.sha1(caminho)
     guardado = cache.obter(h)
     # um resultado offline guardado é refeito quando a consulta online é ligada
-    if guardado and (guardado.get("online") or not online):
+    # a identificação melhorou desde que foi guardado: refaz o que não tinha sido bem identificado
+    refazer = (guardado and guardado.get("versao", 1) < metadados.VERSAO
+               and guardado["resultado"].get("confianca") in ("baixa", "nenhuma"))
+    if guardado and (guardado.get("online") or not online) and not refazer:
         info, r = guardado["info"], guardado["resultado"]
     else:
         info = arquivos.ler(caminho)
         r = metadados.identificar(caminho, info, online)
-        info = {**info, "texto": info["texto"][:15000]}
-        cache.guardar(h, {"online": online, "info": info, "resultado": r})
+        info = {**info, "texto": info["texto"][:15000], "capa": info.get("capa", "")[:15000]}
+        cache.guardar(h, {"online": online, "versao": _versao(), "info": info, "resultado": r})
     it = Item(caminho=caminho, sha1=h, anotacoes=info.get("anotacoes", 0),
               **{k: r.get(k, "") or ("nenhuma" if k == "confianca" else "") for k in CAMPOS_CACHE})
     it.extras["impressao"] = info.get("impressao", "")
-    it.tema = temas.sugerir(f"{it.titulo} {os.path.basename(caminho)} {info.get('texto', '')}", lista_temas)
+    # guardado para refazer a sugestão de tema quando você cria ou muda temas na revisão
+    it.extras["texto_tema"] = f"{it.titulo} {os.path.basename(caminho)} {info.get('texto', '')}"
+    it.tema = temas.sugerir(it.extras["texto_tema"], lista_temas)
     it.incluir = it.confianca in ("alta", "media")
     return it
+
+
+def pastas_ignoradas(origem, destino):
+    """Pastas que não entram na análise: o destino, só quando fica DENTRO da pasta analisada (o que já foi
+    organizado não é reorganizado); e a pasta de duplicatas separadas para excluir."""
+    if not destino:
+        return []
+    o, d = (os.path.normcase(os.path.abspath(p)) for p in (origem, destino))
+    ignorar = [destino] if d.startswith(o + os.sep) else []
+    return ignorar + [os.path.join(destino, organizar.PASTA_DUPLICATAS)]
 
 
 def analisar_pasta(raiz, online=True, ignorar=(), progresso=None, cancelar=None, trabalhadores=6):
@@ -71,6 +91,15 @@ def analisar_pasta(raiz, online=True, ignorar=(), progresso=None, cancelar=None,
                 itens.append(Item(caminho=c, fonte="erro", observacao=f"erro: {str(e)[:100]}"))
             if progresso:
                 progresso(n, len(caminhos), c)
+    if not (cancelar and cancelar()):
+        for c in arquivos.listar(raiz, ignorar, arquivos.OUTROS_FORMATOS):
+            try:
+                h = arquivos.sha1(c)
+            except OSError:
+                continue
+            itens.append(Item(caminho=c, sha1=h, fonte="outro formato", confianca="nenhuma",
+                              observacao="formato que a Estante não lê: vai para a pasta de outros formatos"))
+    arquivos.salvar_hashes()
     itens.sort(key=lambda i: i.caminho.lower())
     marcar_duplicatas(itens)
     return itens

@@ -5,11 +5,15 @@ import datetime as dt
 import os
 import shutil
 
-from .arquivos import longo, sha1
+from .arquivos import EXTENSOES, longo, registrar_movido, salvar_hashes, sha1
 from .nomes import limpar, nome_arquivo
 
 POR_TEMA, POR_AUTOR, SEM_PASTAS = "tema", "autor", "nenhuma"
 PASTA_LOGS = "_estante_logs"
+PASTA_CONFIRMAR = "_A confirmar"  # identificação baixa/nenhuma: sai da bagunça, mas com o nome original
+PASTA_DUPLICATAS = "_Duplicatas a excluir"  # cópias redundantes, separadas para você apagar (só no modo mover)
+PASTA_FORMATOS = "_Outros formatos"  # .doc, .docx, .mobi…: não são lidos, mas saem da bagunça com o nome original
+NAO_CONFIRMADOS = ("baixa", "nenhuma")
 COLUNAS_CSV = ["incluir", "caminho", "sobrenome", "titulo", "ano", "tema", "destino", "confianca", "fonte",
                "identificador", "anotacoes", "duplicata_de", "observacao", "sha1"]
 
@@ -24,20 +28,56 @@ def pasta_de(item, modo):
 
 def planejar(itens, destino, modo):
     """Calcula o destino (relativo) de cada item selecionado, evitando nomes repetidos entre si
-    e com arquivos diferentes que já existam na pasta de destino."""
+    e com arquivos diferentes que já existam na pasta de destino. Itens de confiança baixa ou
+    nenhuma (não editados) vão para PASTA_CONFIRMAR e duplicatas para PASTA_DUPLICATAS, ambos
+    com o nome original."""
     usados = set()
+    por_caminho = {os.path.normcase(i.caminho): i for i in itens}
     for it in itens:
         it.destino = ""
-        if not it.incluir:
+    redundantes = [it for it in itens if it.incluir and _redundante(it, por_caminho)]
+    for it in itens:
+        if not it.incluir or it in redundantes:
             continue
-        nome = nome_arquivo(it.sobrenome, it.titulo, it.ano, it.ext)
-        rel = os.path.join(pasta_de(it, modo), nome)
-        base, n = rel[: -len(it.ext)], 2
-        while rel.lower() in usados or _ocupado(os.path.join(destino, rel), it.sha1):
-            rel = f"{base} ({n}){it.ext}"
-            n += 1
-        usados.add(rel.lower())
-        it.destino = rel
+        if it.ext not in EXTENSOES:
+            rel = os.path.join(PASTA_FORMATOS, os.path.basename(it.caminho))
+        elif it.confianca in NAO_CONFIRMADOS:
+            rel = os.path.join(PASTA_CONFIRMAR, os.path.basename(it.caminho))
+        else:
+            rel = os.path.join(pasta_de(it, modo), nome_arquivo(it.sobrenome, it.titulo, it.ano, it.ext))
+        it.destino = _livre(rel, it, destino, usados)
+    # cópia idêntica que já ocupa o lugar planejado para o principal fica onde está; quem sobra é o principal
+    for d in itens:
+        p = por_caminho.get(os.path.normcase(d.duplicata_de)) if d.duplicata_de else None
+        if (p and p.destino and p.sha1 == d.sha1 and p not in redundantes
+                and os.path.normcase(os.path.join(destino, p.destino)) == os.path.normcase(d.caminho)):
+            p.destino = ""
+            redundantes.append(p)
+            if d in redundantes:
+                redundantes.remove(d)
+                d.destino = ""  # sem destino: não é tocado
+    for it in redundantes:
+        it.destino = _livre(os.path.join(PASTA_DUPLICATAS, os.path.basename(it.caminho)), it, destino, usados, estrito=True)
+
+
+def _redundante(it, por_caminho):
+    """Duplicata a separar? Cópias com anotações próprias (conteúdo diferente) nunca são."""
+    if not it.duplicata_de:
+        return False
+    p = por_caminho.get(os.path.normcase(it.duplicata_de))
+    return not (it.anotacoes and p and p.sha1 != it.sha1)
+
+
+def _livre(rel, it, destino, usados, estrito=False):
+    """`rel` ou "rel (2)", "rel (3)"… o primeiro que não colida. `estrito`: qualquer arquivo existente colide."""
+    base, n = os.path.splitext(rel)[0], 2
+    proprio = os.path.normcase(os.path.abspath(it.caminho))
+    while rel.lower() in usados or (os.path.normcase(os.path.abspath(os.path.join(destino, rel))) != proprio
+                                    and _ocupado(os.path.join(destino, rel), None if estrito else it.sha1)):
+        rel = f"{base} ({n}){it.ext}"
+        n += 1
+    usados.add(rel.lower())
+    return rel
 
 
 def _ocupado(caminho, h):
@@ -53,7 +93,7 @@ def aplicar(itens, destino, operacao="copiar", progresso=None):
     os.makedirs(longo(pasta_logs), exist_ok=True)
     log_path = os.path.join(pasta_logs, f"{operacao}_{dt.datetime.now():%Y%m%d_%H%M%S}.csv")
     alvo = [i for i in itens if i.incluir and i.destino]
-    feitos, pulados = 0, []
+    feitos, pulados, usados = 0, [], {i.destino.lower() for i in alvo}
     with open(longo(log_path), "w", newline="", encoding="utf-8-sig") as f:
         log = csv.writer(f, delimiter=";")
         log.writerow(["operacao", "origem", "destino", "sha1", "quando"])
@@ -63,19 +103,24 @@ def aplicar(itens, destino, operacao="copiar", progresso=None):
             final = os.path.join(destino, it.destino)
             if os.path.normcase(os.path.abspath(final)) == os.path.normcase(os.path.abspath(it.caminho)):
                 continue  # já está no lugar e com o nome certo
+            if operacao != "mover" and it.destino.startswith(PASTA_DUPLICATAS + os.sep):
+                pulados.append(f"duplicata (só é separada no modo mover): {it.caminho}"); continue
             if not os.path.exists(longo(it.caminho)):
                 pulados.append(f"não existe mais: {it.caminho}"); continue
             if it.sha1 and sha1(it.caminho) != it.sha1:
                 pulados.append(f"mudou desde a análise (analise de novo): {it.caminho}"); continue
             if os.path.exists(longo(final)):
-                if sha1(final) == it.sha1:
-                    pulados.append(f"já está no destino: {it.destino}")
-                else:
-                    pulados.append(f"destino ocupado por outro arquivo: {it.destino}")
-                continue
+                if sha1(final) != it.sha1:
+                    pulados.append(f"destino ocupado por outro arquivo: {it.destino}"); continue
+                if operacao != "mover":
+                    pulados.append(f"já está no destino: {it.destino}"); continue
+                # o idêntico já está no lugar: este é redundante
+                final = os.path.join(destino, _livre(os.path.join(PASTA_DUPLICATAS, os.path.basename(it.caminho)),
+                                                     it, destino, usados, estrito=True))
             os.makedirs(longo(os.path.dirname(final)), exist_ok=True)
             if operacao == "mover":
                 shutil.move(longo(it.caminho), longo(final))
+                registrar_movido(it.caminho, final, it.sha1)
             else:
                 shutil.copy2(longo(it.caminho), longo(final))
                 if it.sha1 and sha1(final) != it.sha1:
@@ -84,6 +129,7 @@ def aplicar(itens, destino, operacao="copiar", progresso=None):
             feitos += 1
             log.writerow([operacao, it.caminho, final, it.sha1, dt.datetime.now().isoformat(timespec="seconds")])
             f.flush()
+    salvar_hashes()
     return log_path, feitos, pulados
 
 

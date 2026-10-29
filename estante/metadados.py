@@ -6,22 +6,29 @@ from pathlib import Path
 
 import requests
 
-from . import __version__
+from . import __version__, arquivos
 from .nomes import capitalizar, norm, similaridade, suavizar_titulo
 
 HTTP = requests.Session()
+VERSAO = 4  # sobe quando a identificação melhora: o cache refaz só o que não foi bem identificado
+CHAVE_OPENALEX = ""
+AVISOS = set()  # problemas com as bases (ex.: cota esgotada), mostrados ao fim da análise
 
 
-def configurar(email=""):
-    """A CrossRef pede um e-mail de contato (polite pool); é opcional."""
+def configurar(email="", chave_openalex=""):
+    """A CrossRef pede um e-mail de contato (polite pool); o OpenAlex, uma chave gratuita. Ambos opcionais."""
+    global CHAVE_OPENALEX
     contato = f"; mailto:{email}" if email else ""
     HTTP.headers["User-Agent"] = f"Estante/{__version__} (organizador de biblioteca pessoal{contato})"
+    CHAVE_OPENALEX = chave_openalex.strip()
 
 
 configurar()
 
 
 def get_json(url, **params):
+    if CHAVE_OPENALEX and "api.openalex.org" in url:
+        params["api_key"] = CHAVE_OPENALEX
     for tentativa in range(3):
         try:
             r = HTTP.get(url, params=params or None, timeout=25)
@@ -31,7 +38,11 @@ def get_json(url, **params):
                 time.sleep(5 * (tentativa + 1))
                 continue
             r.raise_for_status()
-            return r.json()
+            j = r.json()
+            if isinstance(j, dict) and str(j.get("error", "")).lower().startswith("rate limit"):
+                AVISOS.add(f"{url.split('/')[2]}: cota de consultas esgotada ({j.get('message', '')[:120]})")
+                return None
+            return j
         except (requests.RequestException, ValueError):
             time.sleep(2 * (tentativa + 1))
     return None
@@ -134,10 +145,105 @@ def buscar_isbn(isbn):
     return None, None
 
 
+def buscar_titulo(consulta):
+    """Obras cujo título/autor casam com `consulta` no OpenAlex e no CrossRef: [(dados, fonte, identificador)]."""
+    achados = []
+    j = get_json("https://api.openalex.org/works", search=consulta, **{"per-page": 5})
+    for w in (j or {}).get("results", []):
+        if w.get("title"):
+            achados.append((de_openalex(w), "OpenAlex (título)", w.get("doi") or w.get("id", "")))
+    j = get_json("https://api.crossref.org/works", **{"query.bibliographic": consulta, "rows": 5})
+    for item in (j or {}).get("message", {}).get("items", []):
+        if item.get("title"):
+            achados.append((de_crossref(item), "CrossRef (título)", f"doi:{item.get('DOI', '').lower()}"))
+    return achados
+
+
+def palavras(t):
+    return [w for w in norm(t).split() if len(w) > 3]
+
+
 # títulos que são, na verdade, nomes de arquivo de diagramação/edição ("Revista 54.vp", "cap1.indd"…)
 LIXO_META = re.compile(r"microsoft (word|powerpoint)|untitled|^document|\.[a-z]{1,4}\d?$"
                        r"|^\s*$|^title$|^pdf$|^c[oó]pia de", re.I)
-RE_ANO = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+
+
+def consultas_titulo(path, info):
+    """Títulos prováveis para buscar: o da capa, o dos metadados e o nome do arquivo."""
+    meta_t = (info.get("meta", {}).get("title") or "").strip()
+    nome = re.sub(r"[_+]+|\(\d+\)", " ", Path(path).stem)
+    vistos, saida = set(), []
+    capa = info.get("titulos_capa") or [info.get("titulo_fonte", "")]
+    for t in (*capa, "" if LIXO_META.search(meta_t) else meta_t, nome):
+        t = re.sub(r"\s+", " ", t or "").strip()[:200]
+        if len(palavras(t)) >= 3 and norm(t) not in vistos:
+            vistos.add(norm(t))
+            saida.append(t)
+    return saida
+
+
+def por_titulo(path, info, contexto):
+    """Sem DOI/ISBN: busca pelo título e só aceita a obra cujo título corresponde ao buscado (nos dois
+    sentidos: evita resenhas e obras parecidas) e cujo sobrenome está na capa ou no nome do arquivo."""
+    capa = f" {norm(info.get('capa') or info.get('texto', '')[:2500])} {norm(Path(path).stem)} "
+    for consulta in consultas_titulo(path, info):
+        bons = []
+        for dados, fonte, ident in buscar_titulo(consulta):
+            if len(palavras(dados["titulo"])) < 3:  # títulos genéricos curtos casam com qualquer coisa
+                continue
+            sim = similaridade(dados["titulo"], contexto)
+            sobrenome = norm(dados["sobrenome"])
+            autor_ok = len(sobrenome) >= 2 and f" {sobrenome} " in capa
+            corresponde = min(similaridade(dados["titulo"], consulta), similaridade(consulta, dados["titulo"]))
+            identico = corresponde >= 0.95 and sim >= 0.95 and len(sobrenome) >= 2  # basta o título, palavra por palavra
+            if sim >= 0.8 and corresponde >= 0.75 and (autor_ok or identico):
+                bons.append((sim, dados, fonte, ident))
+        if bons:
+            _, dados, fonte, ident = max(bons, key=lambda b: b[0])
+            return {**dados, "fonte": fonte, "identificador": ident, "confianca": "media",
+                    "observacao": f"achado pela busca do título \"{consulta[:60]}\"; título e autor conferem com o arquivo"}
+    return None
+RE_ANO = re.compile(r"\b(18\d{2}|19\d{2}|20\d{2})\b")
+SUFIXOS = {"junior", "jr", "neto", "filho", "sobrinho"}
+# capa que é, na verdade, resumo ou documento pessoal (contrato, declaração…)
+CAPA_INVALIDA = re.compile(r"^(resumo|abstract)\b|\bcpf\b|\bportador|inscrit[oa] n[oa]|solteir|casad[oa],|"
+                           r"copyright|demonstrativo|holerite|contracheque|pagamento mensal|pr[oó].reitoria", re.I)
+
+
+def sobrenome_de(nome):
+    """'Adhemar Moreira de Souza Neto' -> 'Souza Neto'; 'Israel Frois' -> 'Frois'."""
+    ws = nome.replace(".", " ").split()
+    if len(ws) > 1 and norm(ws[-1]) in SUFIXOS:
+        return " ".join(ws[-2:])
+    return ws[-1] if ws else ""
+
+
+RE_NOME_ARQUIVO = re.compile(r"^(?P<autor>[^-–]{2,60}?)\s+[-–]\s+(?P<titulo>.+?)(?:\s+[-–]\s+(?P<ano>1[5-9]\d{2}|20\d{2}))?$")
+
+
+def pela_capa(path, info):
+    """Identificação local, sem internet: o nome do arquivo quando já segue "Autor - Título - Ano" e
+    confere com o texto; senão, título e autor lidos nas primeiras páginas (nome logo abaixo do título)."""
+    texto = info.get("texto", "")
+    capa = f" {norm(info.get('capa') or texto[:2500])} "
+    m = RE_NOME_ARQUIVO.match(Path(path).stem)
+    # "Da Guerra - Carl von Clausewitz": se a parte do "título" é um nome, a ordem é ambígua
+    if m and not arquivos.nome_de_pessoa(m["titulo"]) and not arquivos.NAO_NOME.search(m["autor"]):
+        autor = re.split(r"[,;&]|\s+and\s+|\s+e\s+", m["autor"])[0].strip()
+        sobrenome = sobrenome_de(autor)
+        if (len(palavras(m["titulo"])) >= 2 and similaridade(m["titulo"], texto) >= 0.8
+                and len(norm(sobrenome)) >= 3 and f" {norm(sobrenome)} " in capa):
+            return {"sobrenome": capitalizar(sobrenome), "titulo": suavizar_titulo(m["titulo"]), "ano": m["ano"] or "",
+                    "fonte": "nome do arquivo", "identificador": "", "confianca": "media",
+                    "observacao": "título e autor do nome do arquivo conferem com o texto"}
+    for titulo, autor in info.get("capa_ids", []):
+        sobrenome = sobrenome_de(autor)
+        if len(norm(sobrenome)) >= 3 and len(palavras(titulo)) >= 3 and not CAPA_INVALIDA.search(titulo):
+            ano, nota = ano_provavel(texto, Path(path).stem)
+            return {"sobrenome": capitalizar(sobrenome), "titulo": suavizar_titulo(titulo), "ano": ano,
+                    "fonte": "capa do arquivo", "identificador": "", "confianca": "media",
+                    "observacao": f"título e autor lidos nas primeiras páginas; {nota}"}
+    return None
 
 
 def ano_provavel(texto, nome):
@@ -194,19 +300,30 @@ def identificar(path, info, online=True):
                        "observacao": "; ".join(obs)}
         else:
             reserva = None
+        achado = por_titulo(path, info, contexto)
+        if achado:
+            return achado
     else:
         reserva = None
+
+    # Sem internet (ou nada nas bases): título e autor lidos no próprio arquivo
+    local = pela_capa(path, info)
+    if local:
+        if obs:
+            local["observacao"] = "; ".join([*obs, local["observacao"]])
+        return local
 
     # Sem identificador confiável: metadados internos do arquivo
     titulo_meta = (meta.get("title") or "").strip()
     autor_meta = (meta.get("author") or "").strip()
     if titulo_meta and not LIXO_META.search(titulo_meta) and len(titulo_meta) > 5:
         autor1 = re.split(r"[;,&]| and | e ", autor_meta)[0].strip() if autor_meta else ""
+        autor1 = re.sub(r"\(.*?\)|\S*\d\S*", "", autor1).strip()  # "(edt)", "eb0203841044"…
         ano, nota = ano_provavel(texto, Path(path).stem)
         sim = similaridade(titulo_meta, contexto)
         conf = "media" if sim >= 0.8 and autor1 and ano else "baixa"
         obs.append(nota)
-        return {"sobrenome": capitalizar(autor1.split()[-1]) if autor1 else "", "titulo": suavizar_titulo(titulo_meta),
+        return {"sobrenome": capitalizar(sobrenome_de(autor1)) if autor1 else "", "titulo": suavizar_titulo(titulo_meta),
                 "ano": ano, "fonte": "metadados do arquivo", "identificador": "", "confianca": conf,
                 "observacao": "; ".join(obs)}
     if reserva:

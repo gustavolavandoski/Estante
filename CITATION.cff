@@ -13,8 +13,8 @@ authors:
     given-names: Luiz Gustavo
     orcid: "https://orcid.org/0000-0003-3102-6062"
     affiliation: "Universidade Federal do ABC (UFABC)"
-version: 0.1.0
-date-released: "2026-10-04"
+version: 0.2.0
+date-released: "2026-10-28"
 license: AGPL-3.0-only
 keywords:
   - gestão de referências
